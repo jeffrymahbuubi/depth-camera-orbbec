@@ -7,3 +7,4 @@ transformers
 rerun-sdk
 rerun-sdk[notebook]
 pybind11-stubgen
+jupyter
