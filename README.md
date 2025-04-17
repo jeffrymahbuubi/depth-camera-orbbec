@@ -85,6 +85,28 @@
      ```bash
      python <example_script.py>
      ```
+     
+### 6. Configure `pyorbbecsdk` globally
+   - After the 3rd Step of `Build the Python Binding Using CMake`, you can go to the `install/lib/` folder and copy all following files:
+     - `depthengine_2_0.dll`
+     - `live555.dll`
+     - `live555.lib`
+     - `ob_usb.dll`
+     - `ob_usb.lib`
+     - `OrbbecSDK.dll`
+     - `OrbbecSDK.lib`
+     - `pyorbbecsdk.pyd`
+   - Copy these files to the virtual environments folder of `.\venv\Lib\site-packages` 
+   - On addition to generate the `stubs` for intellisense, you can generate the `stubs` by do following
+     ```bash
+     pip install pybind11-stubgen
+     pybind11-stubgen pyorbbecsdk --ignore-all-errors
+     ```
+   - Check the intellisense in your IDE by doing as follows:
+     ```python
+     import pyorbbecsdk as pyd
+     pyd.<TAB>
+     ```
 
 Now you're ready to use the ORBBEC Gemini 2XL Depth Camera with the Python SDK!
 
