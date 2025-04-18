@@ -3,6 +3,7 @@ torchvision==0.20.0+cu118
 --extra-index-url https://download.pytorch.org/whl/cu118
 
 datasets
+datasets[vision]
 transformers
 rerun-sdk
 rerun-sdk[notebook]
