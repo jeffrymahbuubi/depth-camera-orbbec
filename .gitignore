@@ -3,3 +3,4 @@ Data/
 __pycache__/
 label-studio/
 UCF101_subset
+videomae-base-finetuned-ucf101-subset/
