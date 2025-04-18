@@ -2,3 +2,4 @@ Log/
 Data/
 __pycache__/
 label-studio/
+UCF101_subset
