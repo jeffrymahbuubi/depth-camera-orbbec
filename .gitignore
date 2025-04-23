@@ -6,3 +6,7 @@ UCF101_subset
 videomae-base-finetuned-ucf101-subset/
 experiments/
 *.pkl/
+*.tar.gz/
+**/gdrive_linux-x64.tar
+/gdrive_linux-x64.tar.gz/
+/gdrive_export-11208120_gs_ncku_edu_tw.tar/

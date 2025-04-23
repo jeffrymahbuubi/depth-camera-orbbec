@@ -112,7 +112,7 @@ def prepare_model(unique_labels, label2id, id2label):
     """Instantiate processor and model from pretrained checkpoint."""
     ckpt = "MCG-NJU/videomae-base"
     logger.info("Loading model and processor from '%s'", ckpt)
-    processor = AutoImageProcessor.from_pretrained(ckpt)
+    processor = AutoImageProcessor.from_pretrained(ckpt, use_fast=True)
     model = VideoMAEForVideoClassification.from_pretrained(
         ckpt, num_labels=len(unique_labels), id2label=id2label, label2id=label2id
     )
@@ -186,15 +186,17 @@ def run():
         output_dir=output_dir,
         remove_unused_columns=False,
         eval_strategy="epoch",
-        save_strategy="epoch",
+        save_strategy="best",
         learning_rate=args.lr,
         per_device_train_batch_size=args.batch_size,
         per_device_eval_batch_size=args.batch_size,
         num_train_epochs=args.epochs,
         warmup_ratio=0.1,
         logging_steps=10,
+        save_total_limit=2,
         load_best_model_at_end=True,
         metric_for_best_model="accuracy",
+        fp16=True
     )
 
     logger.info("Initializing Trainer")
@@ -203,7 +205,6 @@ def run():
         args=training_args,
         train_dataset=train_ds,
         eval_dataset=val_ds,
-        processing_class=processor,
         compute_metrics=compute_metrics,
     )
     metrics_cb = MetricsCallback(trainer)

@@ -10,7 +10,7 @@ def parse_args():
         description="Video Augmentation Script"
     )
     parser.add_argument(
-        '--video_dir',
+        '--data_dir',
         type=str,
         default='./data/video/rgb',
         help="Root directory containing the per-class train folders"
@@ -51,10 +51,10 @@ def augment_numpy_video(arr: np.ndarray):
     return np.stack([f.transpose(2, 0, 1) for f in out_frames], axis=0)
 
 def main():
-    args = parse_args()  # now args.video_dir and args.n_applications are set
+    args = parse_args()  # now args.data_dir and args.n_applications are set
 
     # Use a separate output folder from the source
-    train_dir = os.path.join(args.video_dir, 'train')
+    train_dir = os.path.join(args.data_dir, 'train')
     aug_dir   = os.path.join(os.path.dirname(train_dir), 'train')
 
     # Walk each class folder
