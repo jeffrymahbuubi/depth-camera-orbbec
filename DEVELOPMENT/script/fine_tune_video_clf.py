@@ -36,7 +36,7 @@ def parse_args():
     parser.add_argument(
         "--data_dir",
         type=str,
-        required=True,
+        default='./data/video/rgb',
         help="Root directory containing 'train' and 'val' subfolders",
     )
     parser.add_argument(

@@ -10,3 +10,4 @@ rerun-sdk[notebook]
 pybind11-stubgen
 jupyter
 matplotlib
+transformers[torch]
