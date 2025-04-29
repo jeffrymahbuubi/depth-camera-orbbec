@@ -8,3 +8,5 @@ experiments/
 *.pkl/
 *.tar
 *.tar.gz
+*.csv
+*.npy
