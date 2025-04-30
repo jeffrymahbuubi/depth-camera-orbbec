@@ -28,10 +28,6 @@ def print_device_info(tof_cam):
     temperature = tof_cam.device.get_chip_temperature()
     logger.info(f"Chip Temperature: {temperature:.2f}°C")
     
-    # Get chip information
-    chip_id, wafer_id = tof_cam.device.get_chip_infos()
-    logger.info(f"Chip ID: {chip_id}, Wafer ID: {wafer_id}")
-    
     # Get resolution
     resolution = tof_cam.settings.resolution
     logger.info(f"Sensor Resolution: {resolution[0]}x{resolution[1]}")

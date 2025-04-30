@@ -3,9 +3,10 @@ import struct
 import logging
 import numpy as np
 from typing import Optional
-import communicationType as ComType
-import commandList as CommandList
-import serialInterface as SerialInterface
+from communicationType import communicationType as ComType
+from commandList import commandList as CommandList
+# Fix the import - need to import the class directly from the module
+from serialInterface import SerialInterface as SerialInterfaceClass
 from crc import Crc, CrcMode
 from transformations_3d import depth_to_3d
 import atexit
@@ -62,11 +63,11 @@ class TOF_Settings_Controller:
 class InterfaceWrapper:
     """Wrapper for serial communication with the TOF module"""
     def __init__(self, port: Optional[str]=None) -> None:
-        self.com = SerialInterface(port, timeout=1)
+        # Use the class directly, not the module
+        self.com = SerialInterfaceClass(port, baudrate=115200, timeout=2.0)  # Increased timeout
         self.crc = Crc(mode=CrcMode.CRC32_STM32, revout=False)
         self.__answer_table = {
             ComType.DATA_TEMPERATURE: 10,
-            ComType.DATA_CHIP_INFORMATION: 12,
             ComType.DATA_FIRMWARE_RELEASE: 12,
             ComType.DATA_REGION_LENGTH_WIDTH: 10,
         }
@@ -94,58 +95,112 @@ class InterfaceWrapper:
         a[12] = (crc >> 16) & 0xFF
         a[13] = (crc >> 24) & 0xFF
 
+        # Log the command being sent
+        cmd_hex = ' '.join([f'0x{x:02X}' for x in a])
+        log.debug(f"Sending command: {cmd_hex}")
+        
         self.com.write(a)
+        time.sleep(0.1)  # Add a small delay after sending command
 
     def getAcknowledge(self):
         """Read and verify acknowledge response"""
         LEN_BYTES = 8
         tmp = self.com.read(LEN_BYTES)
+        
         if len(tmp) != LEN_BYTES:
+            log.error(f"Acknowledge: Wrong number of bytes received! Expected {LEN_BYTES}, got {len(tmp)}")
+            # If we received any bytes, try to decode them for debugging
+            if len(tmp) > 0:
+                log.error(f"Received bytes: {' '.join([f'0x{b:02X}' for b in tmp])}")
             raise Exception(f"Wrong number of bytes received! Expected {LEN_BYTES}, got {len(tmp)}")
+            
         if not self.crc.verify(tmp[:-4], tmp[-4:]):
+            log.error("Acknowledge: CRC not valid!")
             raise Exception("CRC not valid!")
+            
         if tmp[1] != 0x00:  # DATA_ACK value
+            log.error(f"Acknowledge: Got wrong type: 0x{tmp[1]:02X}")
             raise Exception(f"Got wrong type: 0x{tmp[1]:02X}")
+            
         return True
     
     def getAnswer(self, typeId, length):
         """Read and verify a response of fixed length"""
-        tmp = self.com.read(length)
+        # First, read header bytes to see if there's any response
+        header = self.com.read(4)
+        if len(header) == 0:
+            log.error(f"No response received when expecting type 0x{typeId:02X}")
+            # Try sending the command again
+            raise Exception(f"No response received from device")
+            
+        if len(header) < 4:
+            log.error(f"Incomplete header received: {header}")
+            raise Exception(f"Incomplete header received: {header}")
+            
+        # Now read the rest
+        rest = self.com.read(length - 4)
+        tmp = header + rest
+        
+        log.debug(f"Response received: {' '.join([f'0x{b:02X}' for b in tmp])}")
         
         if len(tmp) != length:
+            log.error(f"Wrong number of bytes received! Expected {length}, got {len(tmp)}")
             raise Exception(f"Wrong number of bytes received! Expected {length}, got {len(tmp)}")
+            
         if not self.crc.verify(tmp[:-4], tmp[-4:]):
+            log.error("CRC not valid!")
             raise Exception("CRC not valid!")
+            
         if tmp[1] == ComType.DATA_NACK:
+            log.error("Received NACK")
             raise Exception("Received NACK")
+            
         if typeId != tmp[1]:
+            log.error(f"Wrong Type! Expected 0x{typeId:02X}, got 0x{tmp[1]:02X}")
             raise Exception(f"Wrong Type! Expected 0x{typeId:02X}, got 0x{tmp[1]:02X}")
-        length = struct.unpack('<'+'H', tmp[2:4])[0]
-        return tmp[4:4+length]
+            
+        data_length = struct.unpack('<'+'H', tmp[2:4])[0]
+        return tmp[4:4+data_length]
        
     def getData(self, typeId):
         """Read data response with variable length"""
         tmp = self.com.read(4)
+        if len(tmp) == 0:
+            log.error(f"No response received when expecting type 0x{typeId:02X}")
+            raise Exception(f"No response received from device")
+            
         total = bytes(tmp)
         length = struct.unpack('<'+'H', tmp[2:4])[0]
         tmp = self.com.read(length+4)
         total += bytes(tmp)
+        
+        if len(tmp) < length+4:
+            log.error(f"Incomplete data received. Expected {length+4} more bytes, got {len(tmp)}")
+            raise Exception(f"Incomplete data received")
+            
         self.crc.verify(bytearray(total[:-4]), bytearray(total[-4:]))
         if typeId != total[1]:
+            log.error(f"Wrong Type! Expected 0x{typeId:02X}, got 0x{total[1]:02X}")
             raise Exception(f"Wrong Type! Expected 0x{typeId:02X}, got 0x{total[1]:02X}")
 
         return [tmp[:-4], length]
 
     def transmit(self, cmd_id: int, arg=[]):
         """Send command with arguments and wait for acknowledgement"""
-        arg.insert(0, cmd_id)
-        self.tofWrite(arg)
+        arg_copy = arg.copy()  # Create copy to avoid modifying the original
+        arg_copy.insert(0, cmd_id)
+        self.tofWrite(arg_copy)
         self.getAcknowledge()
 
     def transceive(self, cmd_id: int, response_id: int, arg=[]):
         """Send command and receive response"""
-        arg.insert(0, cmd_id)
-        self.tofWrite(arg)
+        arg_copy = arg.copy()  # Create copy to avoid modifying the original
+        arg_copy.insert(0, cmd_id)
+        self.tofWrite(arg_copy)
+        
+        # Add delay before reading response
+        time.sleep(0.2)
+        
         length = self.__get_answer_len(response_id)
         return self.getAnswer(response_id, length)
 
@@ -198,13 +253,6 @@ class TOFcam611_Device(Dev_Infos_Controller):
     """Device information controller for P8864 TOF module"""
     def __init__(self, interface: InterfaceWrapper) -> None:
         self.interface = interface
-    
-    def get_chip_infos(self) -> tuple[int, int]:
-        """Get chip information (chip ID and wafer ID)"""
-        response = self.interface.transceive(CommandList.COMMAND_GET_CHIP_INFORMATION, 
-                                           ComType.DATA_CHIP_INFORMATION)
-        data = list(struct.unpack('<'+'H'*2, response))
-        return (data[0], data[1])  # chipId, waferId
     
     def get_chip_temperature(self) -> float:
         """Get the chip temperature in °C"""
