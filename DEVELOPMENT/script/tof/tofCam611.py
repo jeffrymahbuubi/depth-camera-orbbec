@@ -241,12 +241,50 @@ class TOFcam611_Settings(TOF_Settings_Controller):
         log.info(f"{'Enable' if enable else 'Disable'} adaptive integration time")
         self.interface.transmit(CommandList.COMMAND_SET_ADAPTIVE_INTEGRATION, 
                               [0 if enable else 1])
+        
+    def set_fps_mode(self, mode='medium'):
+        """
+        Set the frame rate mode of the TOF camera based on period frequency
+        
+        Parameters:
+        mode (str): The frame rate mode to use
+            - 'high': Higher frame rate (~30fps), less frequent adaptive updates (period=9)
+            - 'medium': Balanced frame rate (~20fps) (period=5)
+            - 'accurate': Lower frame rate (~12fps), more frequent adaptive updates (period=2)
+            - 'custom': Use a custom period value
+        period (int, optional): Custom period value (1-9) when mode is 'custom'
+        
+        According to the datasheet, this setting determines how often the adaptive
+        integration time is updated. With period=N, integration time is updated on
+        the first acquisition and then reused for the next N-1 acquisitions.
+        """
+        if mode == 'high':
+            # Less frequent adaptive integration for higher frame rate
+            self.set_period_frequency(9)
+            log.info(f"Set camera to high FPS mode (period frequency: 9)")
+        elif mode == 'medium':
+            # Balanced approach
+            self.set_period_frequency(5)
+            log.info(f"Set camera to medium FPS mode (period frequency: 5)")
+        elif mode == 'accurate':
+            # Frequent adaptive integration for better accuracy in changing scenes
+            self.set_period_frequency(2)
+            log.info(f"Set camera to accurate mode (period frequency: 2)")
+        elif mode == 'custom':
+            # Keep the current period frequency setting
+            current_period = getattr(self, '_period_frequency', 1)
+            log.info(f"Maintaining custom period frequency: {current_period}")
+        else:
+            # Default behavior uses adaptive integration every frame
+            self.set_period_frequency(1)
+            log.info(f"Set camera to default mode (period frequency: 1)")
 
     def set_period_frequency(self, period: int = 1):
         """Set period between adaptive integration time updates"""
         if period < 1 or period > 9:
             raise ValueError(f"Period must be between 1 and 9")
         log.info(f"Set period frequency to {period}")
+        self._period_frequency = period  # Store the current value
         self.interface.transmit(CommandList.COMMAND_SET_PERIOD_FREQUENCY, [period])
 
 class TOFcam611_Device(Dev_Infos_Controller):
