@@ -10,3 +10,5 @@ experiments/
 *.tar.gz
 *.csv
 *.npy
+gdrive_linux-x64.tar.gz
+gdrive_export-11208120_gs_ncku_edu_tw.tar
