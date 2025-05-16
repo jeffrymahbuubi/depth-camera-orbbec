@@ -1,9 +1,5 @@
 numpy==1.26.4
 datasets[vision]
-rerun-sdk
-rerun-sdk[notebook]
-pybind11-stubgen
-jupyter
 matplotlib
 transformers[torch]
 albumentations
