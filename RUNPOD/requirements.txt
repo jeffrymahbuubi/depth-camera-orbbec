@@ -1,0 +1,10 @@
+numpy==1.26.4
+datasets[vision]
+matplotlib
+transformers[torch]
+albumentations
+scikit-learn
+torchinfo
+einops
+accelerate
+evaluate

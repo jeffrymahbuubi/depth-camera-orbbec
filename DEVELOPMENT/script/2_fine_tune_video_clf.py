@@ -9,16 +9,17 @@ from datetime import datetime
 import numpy as np
 import torch
 import torch.nn.functional as F
+import einops
 from torchvision.transforms import Compose, Lambda
 
-from datasets import Dataset
+from datasets import Dataset, Features, Value, ClassLabel
 from transformers import (
     VideoMAEForVideoClassification,
     AutoImageProcessor,
     TrainingArguments,
 )
 
-from src.utils import RandomShortSideScale, Normalize, UniformTemporalSubsample
+from src.utils import Normalize
 from src.training_setup import compute_metrics, CustomTrainer, MetricsCallback
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -66,122 +67,163 @@ def parse_args():
     return parser.parse_args()
 
 
-def create_dataset(data_dir: str):
-    """Load .npy videos and labels into HuggingFace Datasets."""
-    logger.info("Loading dataset from '%s' …", data_dir)
+def create_dataset(base_dir: str):
+    """Load video data and labels into HuggingFace Datasets."""
+    logger.info(f"Loading dataset from '{base_dir}'")
+
+    train_dirs   = [os.path.join(base_dir, "train_aug")]
+    val_dir      = os.path.join(base_dir, "val")
+    
+    # 2) Collect train file paths & labels
     train_paths, train_labels = [], []
-    for class_name in sorted(os.listdir(os.path.join(data_dir, "train"))):
-        class_dir = os.path.join(data_dir, "train", class_name)
-        if not os.path.isdir(class_dir):
-            continue
-        for p in glob.glob(os.path.join(class_dir, "*.npy")):
-            train_paths.append(p)
-            train_labels.append(class_name)
-
+    for d in train_dirs:
+        for class_name in os.listdir(d):
+            class_dir = os.path.join(d, class_name)
+            if not os.path.isdir(class_dir):
+                continue
+            for npy_path in glob.glob(os.path.join(class_dir, "*.npy")):
+                train_paths.append(npy_path)
+                train_labels.append(class_name)
+    
+    # 3) Collect val file paths & labels
     val_paths, val_labels = [], []
-    for class_name in sorted(os.listdir(os.path.join(data_dir, "val"))):
-        class_dir = os.path.join(data_dir, "val", class_name)
+    for class_name in os.listdir(val_dir):
+        class_dir = os.path.join(val_dir, class_name)
         if not os.path.isdir(class_dir):
             continue
-        for p in glob.glob(os.path.join(class_dir, "*.npy")):
-            val_paths.append(p)
+        for npy_path in glob.glob(os.path.join(class_dir, "*.npy")):
+            val_paths.append(npy_path)
             val_labels.append(class_name)
+    
+    # 4) Define the ordered class list
+    ordered_labels = ["OH", "IH", "SF", "HC", "HH"]
+    
+    # 5) Create custom class label feature with specified order
+    class_feature = ClassLabel(names=ordered_labels)
+    
+    # 6) Create train dataset with custom class feature
+    train_ds = Dataset.from_dict({
+        "image_path": train_paths,
+        "label": train_labels
+    }, features=Features({
+        "image_path": Value("string"),
+        "label": class_feature
+    }))
+    
+    # 7) Create validation dataset with custom class feature
+    val_ds = Dataset.from_dict({
+        "image_path": val_paths,
+        "label": val_labels
+    }, features=Features({
+        "image_path": Value("string"),
+        "label": class_feature
+    }))
+    
+    # 8) Build label2id / id2label with the specified order
+    label2id = {label: idx for idx, label in enumerate(ordered_labels)}
+    id2label = {idx: label for idx, label in enumerate(ordered_labels)}
+    
+    # Log dataset statistics
+    logger.info("Found %d training clips in %d classes", len(train_paths), len(ordered_labels))
+    logger.info("Found %d validation clips in %d classes", len(val_paths), len(ordered_labels))
+    
+    # Print explicit mapping for verification
+    logger.info("\nClass Mapping Verification:")
+    for i in range(len(id2label)):
+        class_name = id2label[i]
+        logger.info(f"ID {i}: {class_name}")
+        
+        # Count samples for this class in training set
+        train_count = sum(1 for label in train_ds["label"] if label == i)
+        logger.info(f"  - Training samples: {train_count}")
+        
+        # Count samples for this class in validation set
+        val_count = sum(1 for label in val_ds["label"] if label == i)
+        logger.info(f"  - Validation samples: {val_count}")
+    
+    return train_ds, val_ds, ordered_labels, label2id, id2label
 
-    logger.info("Found %d training clips in %d classes", len(train_paths), len(set(train_labels)))
-    logger.info("Found %d validation clips in %d classes", len(val_paths), len(set(val_labels)))
 
-    # load into memory
-    train_arrays = [np.load(p) for p in train_paths]
-    val_arrays = [np.load(p) for p in val_paths]
-
-    # build datasets
-    train_ds = Dataset.from_dict({"video": train_arrays, "label": train_labels})
-    val_ds = Dataset.from_dict({"video": val_arrays, "label": val_labels})
-
-    train_ds = train_ds.class_encode_column("label")
-    val_ds = val_ds.class_encode_column("label")
-
-    unique_labels = sorted(set(train_labels))
-    label2id = {lab: i for i, lab in enumerate(unique_labels)}
-    id2label = {i: lab for lab, i in label2id.items()}
-
-    return train_ds, val_ds, unique_labels, label2id, id2label
-
-
-def prepare_model(unique_labels, label2id, id2label):
+def prepare_model(class_labels, label2id, id2label):
     """Instantiate processor and model from pretrained checkpoint."""
     ckpt = "MCG-NJU/videomae-base"
     logger.info("Loading model and processor from '%s'", ckpt)
     processor = AutoImageProcessor.from_pretrained(ckpt, use_fast=True)
     model = VideoMAEForVideoClassification.from_pretrained(
-        ckpt, num_labels=len(unique_labels), id2label=id2label, label2id=label2id
+        ckpt, num_labels=len(class_labels), id2label=id2label, label2id=label2id
     )
     return model, processor
 
 
 def prepare_transforms(processor, model):
-    """Build train/val transform pipelines."""
+    """Build transform pipeline."""
     mean, std = processor.image_mean, processor.image_std
-    num_frames = model.config.num_frames
-    size = processor.size.get("shortest_edge", processor.size.get("height"))
-    resize_to = (size, size)
+    height = processor.size.get("shortest_edge", processor.size.get("height"))
+    width = height
+    resize_to = (height, width)
 
-    train_transform = Compose([
-        UniformTemporalSubsample(num_frames),
-        RandomShortSideScale(256, 320),
-        Lambda(lambda x: x / 255.0),
-        Normalize(mean, std),
+    transform = Compose([
+        Lambda(lambda x: x / 255.0),  # Scale to [0,1]
+        Normalize(mean, std),         # Per-channel normalization
         Lambda(lambda x: F.interpolate(
             x, size=resize_to, mode="bilinear", align_corners=False
-        )),
+        )),  # Resize to model's expected input size
     ])
 
-    val_transform = Compose([
-        UniformTemporalSubsample(num_frames),
-        Lambda(lambda x: x / 255.0),
-        Normalize(mean, std),
-        Lambda(lambda x: F.interpolate(
-            x, size=resize_to, mode="bilinear", align_corners=False
-        )),
-    ])
-
-    return train_transform, val_transform
+    return transform
 
 
 def run():
     args = parse_args()
     logger.info("Arguments: %s", args)
 
-    train_ds, val_ds, unique_labels, label2id, id2label = create_dataset(args.data_dir)
-    model, processor = prepare_model(unique_labels, label2id, id2label)
-    train_tf, val_tf = prepare_transforms(processor, model)
+    train_ds, val_ds, ordered_labels, label2id, id2label = create_dataset(
+        args.data_dir
+    )
+    model, processor = prepare_model(ordered_labels, label2id, id2label)
+    transform = prepare_transforms(processor, model)
 
-    def preprocess(batch, tf):
+    def preprocess_train(batch):
         pixel_values = []
-        for arr in batch["video"]:
+        for path in batch["image_path"]:
+            arr = np.load(path)
+            
+            # Convert numpy array to tensor
             vid = torch.as_tensor(arr, dtype=torch.float32)
-            pixel_values.append(tf(vid))
-        return {"pixel_values": pixel_values, "labels": batch["label"]}
+            
+            # Rearrange from (T, H, W, C) to (T, C, H, W) using einops
+            vid = einops.rearrange(vid, 't h w c -> t c h w')
+            
+            # Apply transformations
+            vid_t = transform(vid)
+            pixel_values.append(vid_t)
+        
+        batch["pixel_values"] = pixel_values
+        batch["labels"] = batch["label"]
+        return batch
+
+    def preprocess_val(batch):
+        return preprocess_train(batch)  # Same preprocessing for validation
 
     logger.info("Applying transforms to training set")
     train_ds = train_ds.map(
-        lambda b: preprocess(b, train_tf),
-        batched=True, batch_size=args.batch_size,
-        remove_columns=["video", "label"]
+        preprocess_train,
+        batched=True, batch_size=args.batch_size // 2,
+        remove_columns=["image_path", "label"]
     )
     train_ds.set_format(type="torch", columns=["pixel_values", "labels"])
 
     logger.info("Applying transforms to validation set")
     val_ds = val_ds.map(
-        lambda b: preprocess(b, val_tf),
-        batched=True, batch_size=args.batch_size,
-        remove_columns=["video", "label"]
+        preprocess_val,
+        batched=True, batch_size=args.batch_size // 2,
+        remove_columns=["image_path", "label"]
     )
     val_ds.set_format(type="torch", columns=["pixel_values", "labels"])
 
     # prepare training arguments
     today = datetime.now().strftime("%Y%m%d")
-    output_dir = os.path.join(args.output_dir, f"{today}-finetuned")
+    output_dir = os.path.join(args.output_dir, f"{today}")
     training_args = TrainingArguments(
         output_dir=output_dir,
         remove_unused_columns=False,
